@@ -28,7 +28,6 @@ where
 {
     get_env: F,
     home: String,
-    locale_keys: Vec<String>,
 }
 
 impl<F> XDGManager<F>
@@ -67,11 +66,10 @@ where
         suffixes
     }
 
-    pub fn new(get_env: F, lc_messages: &str) -> Self {
+    pub fn new(get_env: F) -> Self {
         let home = get_env("HOME").expect("HOME environment variable must be set");
-        let locale_keys = Self::get_locale_keys(lc_messages);
 
-        Self { get_env, home, locale_keys }
+        Self { get_env, home }
     }
 
     fn get_data_dirs(&self) -> Vec<String> {
@@ -97,10 +95,21 @@ where
         }
     }
 
+    fn get_lc_messages(&self) -> String {
+        // See man:locale(7)
+        for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+            if let Ok(val) = (self.get_env)(key) {
+                return val;
+            }
+        }
+        "C".to_string()
+    }
+
     fn get_app_map(&self) -> HashMap<String, DesktopEntry> {
         let mut apps = HashMap::new();
         let data_dirs = self.get_data_dirs();
         let env_paths = self.get_env_paths();
+        let locale_keys = Self::get_locale_keys(&self.get_lc_messages());
         for data_dir in &data_dirs {
             let app_dir = join_path(data_dir, "applications");
             let entries = match fs::read_dir(app_dir) {
@@ -115,7 +124,7 @@ where
                 let path = entry.path();
                 let path_str = path.to_str().unwrap();
                 if path.is_file() && path_str.ends_with(".desktop") {
-                    let mut app = match DesktopEntry::parse(path_str, &self.locale_keys) {
+                    let mut app = match DesktopEntry::parse(path_str, &locale_keys) {
                         Ok(app) => app,
                         Err(err) => {
                             Self::warn(&format!("Could not parse {}: {}", path_str, err.to_string()));
