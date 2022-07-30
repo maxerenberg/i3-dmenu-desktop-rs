@@ -22,6 +22,38 @@ fn join_path(s1: &str, s2: &str) -> String {
     }
 }
 
+fn get_locale_keys(lc_messages: &str) -> Vec<String> {
+    // Ignore the encoding (e.g. .UTF-8)
+    lazy_static! {
+        static ref ENCODING: Regex = Regex::new(r"\.[^@]+").unwrap();
+        static ref COUNTRY_AND_MODIFIER: Regex = Regex::new(r"_[^@]+@").unwrap();
+        static ref MODIFIER: Regex = Regex::new(r"@.*").unwrap();
+        static ref COUNTRY: Regex = Regex::new(r"_[^@]+").unwrap();
+        static ref COUNTRY_OR_MODIFIER: Regex = Regex::new(r"[_@].*").unwrap();
+    }
+    let lc_messages = &*ENCODING.replace(lc_messages, "");
+    // From https://specifications.freedesktop.org/desktop-entry-spec/latest/ar01s05.html
+    //
+    // LC_MESSAGES value     | Possible keys in order of matching
+    // ----------------------|------------------------------------------------------------------------
+    // lang_COUNTRY@MODIFIER | lang_COUNTRY@MODIFIER, lang_COUNTRY, lang@MODIFIER, lang, default value
+    // lang_COUNTRY          | lang_COUNTRY, lang, default value
+    // lang@MODIFIER         | lang@MODIFIER, lang, default value
+    // lang                  | lang, default value
+    let mut suffixes = vec![lc_messages.to_string()];
+    if COUNTRY_AND_MODIFIER.is_match(lc_messages) {
+        let no_modifier = &*MODIFIER.replace(lc_messages, "");
+        suffixes.push(no_modifier.to_string());
+        let no_country = &*COUNTRY.replace(lc_messages, "");
+        suffixes.push(no_country.to_string());
+    }
+    let lang = &*COUNTRY_OR_MODIFIER.replace(lc_messages, "");
+    if lang != lc_messages {
+        suffixes.push(lang.to_string());
+    }
+    suffixes
+}
+
 pub struct XDGManager<F>
 where
     F: Fn(&str) -> Result<String, VarError>
@@ -34,38 +66,6 @@ impl<F> XDGManager<F>
 where
     F: Fn(&str) -> Result<String, VarError>
 {
-    fn get_locale_keys(lc_messages: &str) -> Vec<String> {
-        // Ignore the encoding (e.g. .UTF-8)
-        lazy_static! {
-            static ref ENCODING: Regex = Regex::new(r"\.[^@]+").unwrap();
-            static ref COUNTRY_AND_MODIFIER: Regex = Regex::new(r"_[^@]+@").unwrap();
-            static ref MODIFIER: Regex = Regex::new(r"@.*").unwrap();
-            static ref COUNTRY: Regex = Regex::new(r"_[^@]+").unwrap();
-            static ref COUNTRY_OR_MODIFIER: Regex = Regex::new(r"[_@].*").unwrap();
-        }
-        let lc_messages = &*ENCODING.replace(lc_messages, "");
-        // From https://specifications.freedesktop.org/desktop-entry-spec/latest/ar01s05.html
-        //
-        // LC_MESSAGES value     | Possible keys in order of matching
-        // ----------------------|------------------------------------------------------------------------
-        // lang_COUNTRY@MODIFIER | lang_COUNTRY@MODIFIER, lang_COUNTRY, lang@MODIFIER, lang, default value
-        // lang_COUNTRY          | lang_COUNTRY, lang, default value
-        // lang@MODIFIER         | lang@MODIFIER, lang, default value
-        // lang                  | lang, default value
-        let mut suffixes = vec![lc_messages.to_string()];
-        if COUNTRY_AND_MODIFIER.is_match(lc_messages) {
-            let no_modifier = &*MODIFIER.replace(lc_messages, "");
-            suffixes.push(no_modifier.to_string());
-            let no_country = &*COUNTRY.replace(lc_messages, "");
-            suffixes.push(no_country.to_string());
-        }
-        let lang = &*COUNTRY_OR_MODIFIER.replace(lc_messages, "");
-        if lang != lc_messages {
-            suffixes.push(lang.to_string());
-        }
-        suffixes
-    }
-
     pub fn new(get_env: F) -> Self {
         let home = get_env("HOME").expect("HOME environment variable must be set");
 
@@ -109,7 +109,7 @@ where
         let mut apps = HashMap::new();
         let data_dirs = self.get_data_dirs();
         let env_paths = self.get_env_paths();
-        let locale_keys = Self::get_locale_keys(&self.get_lc_messages());
+        let locale_keys = get_locale_keys(&self.get_lc_messages());
         for data_dir in &data_dirs {
             let app_dir = join_path(data_dir, "applications");
             let entries = match fs::read_dir(app_dir) {
@@ -436,8 +436,7 @@ mod tests {
             |s| match s {
                 "HOME" => Ok(home.to_string()),
                 _ => Err(VarError::NotPresent),
-            },
-            "C"
+            }
         );
         assert_eq!(
             mgr.get_data_dirs(),
@@ -458,8 +457,7 @@ mod tests {
                 "XDG_DATA_HOME" => Ok(format!("{home}/data")),
                 "XDG_DATA_DIRS" => Ok("/var/lib/flatpak/exports/share:/usr/local/share/:/usr/share/".to_string()),
                 _ => Err(VarError::NotPresent),
-            },
-            "C"
+            }
         );
         assert_eq!(
             mgr.get_data_dirs(),
@@ -482,14 +480,7 @@ mod tests {
             ("en", vec!["en".to_string()]),
         ];
         for (lc_messages, locale_keys) in test_cases {
-            let mgr = XDGManager::new(
-                |s| match s {
-                    "HOME" => Ok("/home/max".to_string()),
-                    _ => Err(VarError::NotPresent),
-                },
-                lc_messages
-            );
-            assert_eq!(mgr.locale_keys, locale_keys);
+            assert_eq!(get_locale_keys(lc_messages), locale_keys);
         }
     }
 
