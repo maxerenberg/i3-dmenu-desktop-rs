@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::env::VarError;
+use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, BufRead};
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -11,7 +13,7 @@ pub mod app_launcher;
 use app_launcher::ChildProcessError;
 
 fn is_executable(path: &str) -> bool {
-    fs::metadata(path).map_or(false, |m| m.permissions().mode() & 0111 == 0111)
+    fs::metadata(path).map_or(false, |m| m.permissions().mode() & 0o111 == 0o111)
 }
 
 fn join_path(s1: &str, s2: &str) -> String {
@@ -105,6 +107,43 @@ where
         "C".to_string()
     }
 
+    fn get_desktop_entry_from_file(
+        path: &Path,
+        locale_keys: &[String],
+        env_paths: &[String],
+    )  -> Option<DesktopEntry> {
+        let path_str = path.to_str().unwrap();
+        let mut app = match DesktopEntry::parse(path_str, locale_keys) {
+            Ok(app) => app,
+            Err(err) => {
+                Self::warn(&format!("Could not parse {}: {}", path_str, err));
+                return None;
+            },
+        };
+        if app.Type != "Application" {
+            return None;
+        }
+        if app.Hidden || app.NoDisplay {
+            return None;
+        }
+        app.escape_chars_for_exec_keys();
+        app.remove_invalid_tryexec(env_paths);
+        Some(app)
+    }
+
+    fn get_unique_name_for_desktop_entry(
+        app: &DesktopEntry,
+        existing_apps: &HashMap<String, DesktopEntry>,
+    ) -> String {
+        let mut name = app.Name.clone();
+        let mut counter = 1;
+        while existing_apps.contains_key(&name) {
+            counter += 1;
+            name = format!("{} ({})", &app.Name, counter);
+        }
+        name
+    }
+
     fn get_app_map(&self) -> HashMap<String, DesktopEntry> {
         let mut apps = HashMap::new();
         let data_dirs = self.get_data_dirs();
@@ -124,29 +163,10 @@ where
                 let path = entry.path();
                 let path_str = path.to_str().unwrap();
                 if path.is_file() && path_str.ends_with(".desktop") {
-                    let mut app = match DesktopEntry::parse(path_str, &locale_keys) {
-                        Ok(app) => app,
-                        Err(err) => {
-                            Self::warn(&format!("Could not parse {}: {}", path_str, err.to_string()));
-                            continue
-                        },
-                    };
-                    if app.Type != "Application" {
-                        continue;
+                    if let Some(app) = Self::get_desktop_entry_from_file(&path, &locale_keys, &env_paths) {
+                        let name = Self::get_unique_name_for_desktop_entry(&app, &apps);
+                        apps.insert(name, app);
                     }
-                    if app.Hidden || app.NoDisplay {
-                        continue;
-                    }
-                    // Check for duplicate names
-                    let mut name = app.Name.clone();
-                    let mut counter = 1;
-                    while apps.contains_key(&name) {
-                        counter += 1;
-                        name = format!("{} ({})", &app.Name, counter);
-                    }
-                    app.escape_chars_for_exec_keys();
-                    app.check_try_exec(&env_paths);
-                    apps.insert(name, app);
                 }
             }
         }
@@ -209,11 +229,11 @@ impl From<io::Error> for DesktopEntryError {
     fn from(error: io::Error) -> Self { Self::IoError(error) }
 }
 
-impl DesktopEntryError {
-    fn to_string(&self) -> String {
+impl fmt::Display for DesktopEntryError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::IoError(err) => err.to_string(),
-            Self::ParseError(msg) => msg.clone(),
+            Self::IoError(err) => write!(f, "{err}"),
+            Self::ParseError(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -370,7 +390,7 @@ impl DesktopEntry {
         lazy_static! {
             static ref FIELD_CODE: Regex = Regex::new("%[fFuUdDnNickvm]").unwrap();
         }
-        let first_arg = extra_args.first().map(|s| *s).unwrap_or("");
+        let first_arg = extra_args.first().copied().unwrap_or("");
         let all_args = &extra_args.join(" ");
         FIELD_CODE.replace_all(exec_str, |caps: &regex::Captures| match &caps[0] {
             "%f" => first_arg,
@@ -401,7 +421,7 @@ impl DesktopEntry {
         }
     }
 
-    pub fn check_try_exec(&mut self, env_paths: &[String]) {
+    pub fn remove_invalid_tryexec(&mut self, env_paths: &[String]) {
         let try_exec = match self.TryExec {
             Some(ref val) => val,
             None => return,
@@ -410,7 +430,7 @@ impl DesktopEntry {
         let try_exec_is_valid = if arg0.contains('/') {
             is_executable(&arg0)
         } else {
-            env_paths.iter().any(|path| is_executable(&join_path(&path, &arg0)))
+            env_paths.iter().any(|path| is_executable(&join_path(path, &arg0)))
         };
         if !try_exec_is_valid {
             self.TryExec = None;

@@ -69,7 +69,7 @@ impl fmt::Display for ChildProcessError {
 impl Error for ChildProcessError {}
 
 pub fn get_dmenu_choice<S: AsRef<str>>(app_names: &[S]) -> Result<String, ChildProcessError> {
-    let input = app_names.into_iter().map(AsRef::as_ref).collect::<Vec<_>>().join("\n");
+    let input = app_names.iter().map(AsRef::as_ref).collect::<Vec<_>>().join("\n");
     let mut child = Command::new("dmenu")
         .arg("-i")
         .stdin(Stdio::piped())
