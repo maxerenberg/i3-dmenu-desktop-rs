@@ -119,12 +119,6 @@ where
                 return None;
             },
         };
-        if app.Type != "Application" {
-            return None;
-        }
-        if app.Hidden || app.NoDisplay {
-            return None;
-        }
         app.escape_chars_for_exec_keys();
         app.remove_invalid_tryexec(env_paths);
         Some(app)
@@ -195,6 +189,9 @@ where
         if at_least_one_app_not_in_cache {
             save_desktop_entries_to_cache(&cache_dir, apps_by_name.values());
         }
+        // Only keep apps which do not have Hidden or NoDisplay set to true.
+        // We still want to cache these entries to avoid reading them again on the next run.
+        apps_by_name.retain(|_, app| app.Type == "Application" && !app.Hidden && !app.NoDisplay);
         apps_by_name
     }
 

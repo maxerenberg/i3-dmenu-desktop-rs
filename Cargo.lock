@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "i3-dmenu-desktop-rs"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bincode",
  "lazy_static",
